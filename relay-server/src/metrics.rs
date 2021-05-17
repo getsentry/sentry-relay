@@ -342,6 +342,9 @@ pub enum RelayCounters {
     ///  - `project_cache.hit`: For successful cache lookups, even for outdated projects.
     ///  - `project_cache.miss`: For failed lookups resulting in an update.
     ProjectStateGet,
+    /// Number of times upstream has explicitly asked Relay to retry fetching a particular DSN's
+    /// project state using the `retryConfigs` key in response.
+    ProjectStateRetry,
     /// Number of project state HTTP requests.
     ///
     /// Relay updates projects in batches. Every update cycle, Relay requests
@@ -465,6 +468,7 @@ impl CounterMetric for RelayCounters {
             RelayCounters::ProjectStateGet => "project_state.get",
             RelayCounters::ProjectStateRequest => "project_state.request",
             RelayCounters::ProjectStateNoCache => "project_state.no_cache",
+            RelayCounters::ProjectStateRetry => "project_state.retry",
             RelayCounters::ProjectCacheHit => "project_cache.hit",
             RelayCounters::ProjectCacheMiss => "project_cache.miss",
             RelayCounters::ServerStarting => "server.starting",
