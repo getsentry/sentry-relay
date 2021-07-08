@@ -11,9 +11,15 @@ use relay_sampling::{
     get_matching_event_rule, pseudo_random_from_uuid, rule_type_for_event, RuleId, SamplingResult,
 };
 
+use crate::actors::envelopes::EnvelopeContext;
+use crate::actors::outcome::Outcome::FilteredSampling;
+use crate::actors::outcome::OutcomeProducer;
 use crate::actors::project::ProjectState;
 use crate::actors::project_cache::{GetCachedProjectState, GetProjectState, ProjectCache};
 use crate::envelope::{Envelope, ItemType};
+use crate::utils::EnvelopeSummary;
+use relay_quotas::Scoping;
+use std::time::Instant;
 
 /// Checks whether an event should be kept or removed by dynamic sampling.
 pub fn should_keep_event(
@@ -120,14 +126,18 @@ fn sample_transaction_internal(
 ///
 /// Returns `Ok` if there are remaining items in the envelope. Returns `Err` with the matching rule
 /// identifier if all elements have been removed.
+#[allow(clippy::too_many_arguments)]
 pub fn sample_trace(
     envelope: Envelope,
-    project_key: Option<ProjectKey>,
+    public_key: Option<ProjectKey>,
     project_cache: Addr<ProjectCache>,
+    outcome_producer: Addr<OutcomeProducer>,
     fast_processing: bool,
     processing_enabled: bool,
+    timestamp: Instant,
+    scoping: Scoping,
 ) -> ResponseFuture<Envelope, RuleId> {
-    let project_key = match project_key {
+    let project_key = match public_key {
         None => return Box::new(future::ok(envelope)),
         Some(project) => project,
     };
@@ -138,8 +148,13 @@ pub fn sample_trace(
     if trace_context.is_none() || transaction_item.is_none() {
         return Box::new(future::ok(envelope));
     }
+
+    let envelope_summary = EnvelopeSummary::compute(&envelope);
+    let event_id = envelope.event_id();
+    let remote_addr = envelope.meta().client_addr();
+
     //we have a trace_context and we have a transaction_item see if we can sample them
-    if fast_processing {
+    let future = if fast_processing {
         let fut = project_cache
             .send(GetCachedProjectState::new(project_key))
             .then(move |project_state| {
@@ -168,7 +183,20 @@ pub fn sample_trace(
                     )
                 });
         Box::new(fut) as ResponseFuture<_, _>
-    }
+    };
+
+    Box::new(future.map_err(move |err| {
+        // if the envelope is sampled, send outcomes
+        EnvelopeContext::new(
+            envelope_summary,
+            relay_common::instant_to_date_time(timestamp),
+            event_id,
+            remote_addr,
+            scoping,
+        )
+        .send_outcomes(FilteredSampling(err), outcome_producer);
+        err
+    }))
 }
 
 #[cfg(test)]
