@@ -26,7 +26,9 @@ use crate::envelope::{AttachmentType, Envelope, EnvelopeError, ItemType, Items};
 use crate::extractors::RequestMeta;
 use crate::metrics::RelayCounters;
 use crate::service::{ServiceApp, ServiceState};
-use crate::utils::{self, ApiErrorResponse, EnvelopeSummary, FormDataIter, MultipartError};
+use crate::utils::{
+    self, ApiErrorResponse, EnvelopeSummary, FormDataIter, MultipartError, SendWithOutcome,
+};
 
 #[derive(Fail, Debug)]
 pub enum BadStoreRequest {
@@ -449,18 +451,25 @@ where
             outcome_producer,
             envelope_context,
             |envelope| {
-                project_manager
-                    .send(CheckEnvelope::cached(project_key, envelope))
-                    .map_err(BadStoreRequest::ScheduleFailed)
-                    .and_then(|result| result.map_err(BadStoreRequest::ProjectFailed))
-                    .map_err(move |err| {
-                        if let Some(outcome) = err.to_outcome() {
-                            envelope_context
-                                .borrow()
-                                .send_outcomes(outcome, outcome_producer);
-                        }
-                        err
-                    })
+                project_manager.send_with_outcome_error(
+                    CheckEnvelope::cached(project_key, envelope),
+                    &envelope_context.borrow(),
+                    outcome_producer.clone(),
+                    Outcome::Invalid(DiscardReason::Internal),
+                    BadStoreRequest::ScheduleFailed,
+                    BadStoreRequest::ProjectFailed,
+                )
+                // .send(CheckEnvelope::cached(project_key, envelope))
+                // .map_err(BadStoreRequest::ScheduleFailed)
+                // .and_then(|result| result.map_err(BadStoreRequest::ProjectFailed))
+                // .map_err(move |err| {
+                //     if let Some(outcome) = err.to_outcome() {
+                //         envelope_context
+                //             .borrow()
+                //             .send_outcomes(outcome, outcome_producer);
+                //     }
+                //     err
+                // })
             }
         ))
         .and_then(clone!(outcome_producer, envelope_context, |response| {
